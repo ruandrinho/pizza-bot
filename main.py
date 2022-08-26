@@ -23,12 +23,14 @@ START, HANDLE_MENU, HANDLE_PRODUCT, HANDLE_CART, AWAIT_EMAIL = range(5)
 
 def start(update, context):
     moltin_client = context.bot_data['moltin_client']
+    products_per_page = context.bot_data['products_per_page']
+    all_products = moltin_client.get_all_products()
     keyboard = []
-    for product in moltin_client.get_all_products():
+    for product in all_products[0:products_per_page]:
         keyboard.append([InlineKeyboardButton(product['name'], callback_data=product['id'])])
-    keyboard.append([InlineKeyboardButton('Корзина', callback_data='cart')])
+    keyboard.append([InlineKeyboardButton('Следующие ➡️', callback_data='page1')])
     update.message.reply_text(
-        'Привет! Выбери пиццу:',
+        'Какую пиццу выберешь сегодня?',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     return HANDLE_MENU
@@ -36,37 +38,51 @@ def start(update, context):
 
 def show_menu(update, context):
     moltin_client = context.bot_data['moltin_client']
+    products_per_page = context.bot_data['products_per_page']
     query = update.callback_query
     query.answer()
+    page = 0
+    if 'page' in query.data:
+        page = int(query.data.replace('page', ''))
+    all_products = moltin_client.get_all_products()
     keyboard = []
-    for product in moltin_client.get_all_products():
+    for product in all_products[page * products_per_page:(page + 1) * products_per_page]:
         keyboard.append([InlineKeyboardButton(product['name'], callback_data=product['id'])])
-    keyboard.append([InlineKeyboardButton('Корзина', callback_data='cart')])
+    if page == 0:
+        keyboard.append([InlineKeyboardButton('Следующие ➡️', callback_data=f'page{page + 1}')])
+    elif len(all_products) <= (page + 1) * products_per_page:
+        keyboard.append([InlineKeyboardButton('⬅️ Предыдущие', callback_data=f'page{page - 1}')])
+    else:
+        keyboard.append([
+            InlineKeyboardButton('⬅️ Предыдущие', callback_data=f'page{page - 1}'),
+            InlineKeyboardButton('Следующие ➡️', callback_data=f'page{page + 1}')
+        ])
+    keyboard.append([InlineKeyboardButton('🛒 Корзина', callback_data='cart')])
     query.message.reply_text(
-        'Выбери пиццу:',
+        'Какую пиццу выберешь сегодня?',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     query.message.delete()
     return HANDLE_MENU
 
 
-def show_menu_after_product(update, context):
-    moltin_client = context.bot_data['moltin_client']
-    query = update.callback_query
-    query.answer('Пицца добавлена в корзину')
-    cart_product_id = query.data
-    with suppress(requests.exceptions.HTTPError):
-        moltin_client.add_product_to_cart(cart_product_id, 1, query.from_user.id)
-    keyboard = []
-    for product in moltin_client.get_all_products():
-        keyboard.append([InlineKeyboardButton(product['name'], callback_data=product['id'])])
-    keyboard.append([InlineKeyboardButton('Корзина', callback_data='cart')])
-    query.message.reply_text(
-        'Выбери пиццу:',
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    query.message.delete()
-    return HANDLE_MENU
+# def show_menu_after_product(update, context):
+#     moltin_client = context.bot_data['moltin_client']
+#     query = update.callback_query
+#     query.answer('Пицца добавлена в корзину')
+#     cart_product_id = query.data
+#     with suppress(requests.exceptions.HTTPError):
+#         moltin_client.add_product_to_cart(cart_product_id, 1, query.from_user.id)
+#     keyboard = []
+#     for product in moltin_client.get_all_products():
+#         keyboard.append([InlineKeyboardButton(product['name'], callback_data=product['id'])])
+#     keyboard.append([InlineKeyboardButton('Корзина', callback_data='cart')])
+#     query.message.reply_text(
+#         'Выбери пиццу:',
+#         reply_markup=InlineKeyboardMarkup(keyboard)
+#     )
+#     query.message.delete()
+#     return HANDLE_MENU
 
 
 def show_product(update, context):
@@ -82,9 +98,9 @@ def show_product(update, context):
         product = moltin_client.get_product(query.data)
         keyboard = []
         keyboard.append([
-            InlineKeyboardButton('Заказать', callback_data=f'+{product["id"]}'),
-            InlineKeyboardButton('Корзина', callback_data='cart'),
-            InlineKeyboardButton('Назад', callback_data='back')
+            InlineKeyboardButton('📦 Заказать', callback_data=f'+{product["id"]}'),
+            InlineKeyboardButton('🛒 Корзина', callback_data='cart'),
+            InlineKeyboardButton('🍕 В меню', callback_data='back')
         ])
         message = f'''\
             {product["name"]} / {product["price"]}
@@ -108,12 +124,12 @@ def show_cart(update, context):
         moltin_client.remove_product_from_cart(query.data, query.from_user.id)
     cart_products, cart_cost, cart_summary = moltin_client.get_cart_data(query.from_user.id)
     keyboard = []
-    keyboard.append([InlineKeyboardButton('Оплатить', callback_data='pay')])
+    keyboard.append([InlineKeyboardButton('🧾 Оплатить', callback_data='pay')])
     for product in cart_products:
         keyboard.append(
             [InlineKeyboardButton(f'Убрать из корзины {product["name"]}', callback_data=product['id'])]
         )
-    keyboard.append([InlineKeyboardButton('В меню', callback_data='back')])
+    keyboard.append([InlineKeyboardButton('🍕 В меню', callback_data='back')])
     if cart_summary:
         message = f'{cart_summary}К оплате: {cart_cost}'
     else:
@@ -165,6 +181,7 @@ def main():
         states={
             HANDLE_MENU: [
                 CallbackQueryHandler(show_cart, pattern='^cart$'),
+                CallbackQueryHandler(show_menu, pattern='^page'),
                 CallbackQueryHandler(show_product)
             ],
             HANDLE_CART: [
@@ -190,6 +207,7 @@ def main():
         os.getenv('MOLTIN_CLIENT_ID'),
         os.getenv('MOLTIN_CLIENT_SECRET')
     )
+    dispatcher.bot_data['products_per_page'] = 5
     dispatcher.add_handler(conv_handler)
 
     updater.start_polling()
