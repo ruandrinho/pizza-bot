@@ -1,6 +1,5 @@
 import requests
 import logging
-from textwrap import dedent
 from time import time
 
 logger = logging.getLogger(__name__)
@@ -65,6 +64,19 @@ class MoltinClient:
             'image_url': moltin_file['link']['href']
         }
 
+    def get_product_quantity_in_cart(self, product_name, telegram_user_id):
+        self.check_token()
+        moltin_carts_response = requests.get(
+            f'https://api.moltin.com/v2/carts/{telegram_user_id}/items',
+            headers={'Authorization': f'Bearer {self.token}'}
+        )
+        moltin_carts_response.raise_for_status()
+        cart_products = moltin_carts_response.json()['data']
+        for product in cart_products:
+            if product['name'] == product_name:
+                return product['quantity']
+        return 0
+
     def get_cart_data(self, telegram_user_id):
         self.check_token()
         moltin_carts_response = requests.get(
@@ -72,22 +84,16 @@ class MoltinClient:
             headers={'Authorization': f'Bearer {self.token}'}
         )
         moltin_carts_response.raise_for_status()
-        summary = ''
-        cart_products = moltin_carts_response.json()['data']
-        for product in cart_products:
-            product = {
-                'name': product['name'],
-                'description': product['description'],
-                'price': product['meta']['display_price']['with_tax']['unit']['formatted'],
-                'quantity': product['quantity'],
-                'total_cost': f'{product["value"]["amount"]} ₽'
-            }
-            summary += f'''\
-                {product["name"]} ({product["description"]})
-                {product["quantity"]} шт. на сумму {product["total_cost"]}
-                \n'''
+        cart_products = [{
+            'id': product['id'],
+            'name': product['name'],
+            'description': product['description'],
+            'price': product['meta']['display_price']['with_tax']['unit']['formatted'],
+            'quantity': product['quantity'],
+            'total_cost': f'{product["value"]["amount"]} ₽'
+        } for product in moltin_carts_response.json()['data']]
         total_cart_cost = moltin_carts_response.json()['meta']['display_price']['with_tax']['formatted']
-        return (cart_products, total_cart_cost, dedent(summary))
+        return (cart_products, total_cart_cost)
 
     def add_product_to_cart(self, product_id, product_quantity, telegram_user_id):
         self.check_token()
