@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from textwrap import dedent
 from contextlib import suppress
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import PARSEMODE_MARKDOWN_V2
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
@@ -25,8 +26,8 @@ def get_cart_summary(products):
     summary = ''
     for product in products:
         summary += f'''\
-            {product["name"]} ({product["description"]})
-            {product["quantity"]} шт. на сумму {product["total_cost"]}
+            *{product["name"]}* \(_{product["description"]}_\)
+            {product["quantity"]} шт\. на сумму {product["total_cost"]}
             \n'''
     return dedent(summary)
 
@@ -94,20 +95,21 @@ def show_product(update, context):
             InlineKeyboardButton('🍕 В меню', callback_data='back')
         ])
         message = f'''\
-                {product["name"]} / {product["price"]}
+                *{product["name"]} / {product["price"]}*
 
-                {product["description"]}
+                _{product["description"]}_
                 '''
         quantity_in_cart = moltin_client.get_product_quantity_in_cart(product['name'], query.from_user.id)
         if quantity_in_cart:
             message += f'''\
 
-                В корзине: {quantity_in_cart} шт.
+                В корзине: *{quantity_in_cart} шт\.*
                 '''
         query.message.reply_photo(
             photo=product['image_url'],
             caption=dedent(message),
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=PARSEMODE_MARKDOWN_V2
         )
         query.message.delete()
     return HANDLE_PRODUCT
@@ -129,12 +131,13 @@ def show_cart(update, context):
     keyboard.append([InlineKeyboardButton('🍕 В меню', callback_data='back')])
     cart_summary = get_cart_summary(cart_products)
     if cart_summary:
-        message = f'{cart_summary}К оплате: {cart_cost}'
+        message = f'{cart_summary}*К оплате: {cart_cost}*'
     else:
         message = 'Здесь пока пусто.'
     query.message.reply_text(
         message,
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=PARSEMODE_MARKDOWN_V2
     )
     query.message.delete()
     return HANDLE_CART
