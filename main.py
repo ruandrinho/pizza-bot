@@ -20,7 +20,7 @@ from telegram.ext import (
 
 logger = logging.getLogger(__name__)
 
-START, HANDLE_MENU, HANDLE_PRODUCT, HANDLE_CART, AWAIT_LOCATION, HANDLE_DELIVERY = range(6)
+START, HANDLE_MENU, HANDLE_PRODUCT, HANDLE_CART, AWAIT_LOCATION, HANDLE_DELIVERY, HANDLE_FINISH = range(7)
 
 
 def define_delivery_distance(pizzerias, client_longitude, client_latitude):
@@ -31,14 +31,21 @@ def define_delivery_distance(pizzerias, client_longitude, client_latitude):
         ).km
 
 
-def get_cart_summary(products):
+def escape(s):
+    return s.replace('-', '\-').replace('.', '\.').replace('(', '\(').replace(')', '\)')
+
+
+def get_cart_summary(products, cost):
+    if not products:
+        return 'Здесь пока пусто.'
     summary = ''
     for product in products:
         summary += f'''\
-            *{product["name"]}* \(_{product["description"]}_\)
-            {product["quantity"]} шт\. на сумму {product["total_cost"]}
+            *{product["name"]}* (_{product["description"]}_)
+            {product["quantity"]} шт. на сумму {product["total_cost"]}
             \n'''
-    return dedent(summary)
+    summary = dedent(summary) + f'*К оплате: {cost}*'
+    return summary
 
 
 def fetch_coordinates(apikey, address):
@@ -56,7 +63,7 @@ def fetch_coordinates(apikey, address):
 
     most_relevant = found_places[0]
     lon, lat = most_relevant['GeoObject']['Point']['pos'].split(' ')
-    return lon, lat
+    return float(lon), float(lat)
 
 
 def start(update, context):
@@ -72,6 +79,10 @@ def start(update, context):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     return HANDLE_MENU
+
+
+def start_over(update, context):
+    pass
 
 
 def show_menu(update, context):
@@ -95,7 +106,9 @@ def show_menu(update, context):
             InlineKeyboardButton('⬅️ Предыдущие', callback_data=f'page{page - 1}'),
             InlineKeyboardButton('Следующие ➡️', callback_data=f'page{page + 1}')
         ])
-    keyboard.append([InlineKeyboardButton('🍕 Корзина', callback_data='cart')])
+    cart_products, _ = moltin_client.get_cart_data(query.from_user.id)
+    if cart_products:
+        keyboard.append([InlineKeyboardButton('🍕 Корзина', callback_data='cart')])
     query.message.reply_text(
         'Какую пиццу выберешь сегодня?',
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -130,11 +143,11 @@ def show_product(update, context):
         if quantity_in_cart:
             message += f'''\
 
-                В корзине: *{quantity_in_cart} шт\.*
+                В корзине: *{quantity_in_cart} шт.*
                 '''
         query.message.reply_photo(
             photo=product['image_url'],
-            caption=dedent(message),
+            caption=escape(dedent(message)),
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=PARSEMODE_MARKDOWN_V2
         )
@@ -150,19 +163,15 @@ def show_cart(update, context):
         moltin_client.remove_product_from_cart(query.data, query.from_user.id)
     cart_products, cart_cost = moltin_client.get_cart_data(query.from_user.id)
     keyboard = []
-    keyboard.append([InlineKeyboardButton('🍕 Оформить заказ', callback_data='pay')])
+    if cart_products:
+        keyboard.append([InlineKeyboardButton('🍕 Оформить заказ', callback_data='pay')])
     for product in cart_products:
         keyboard.append(
             [InlineKeyboardButton(f'Убрать из корзины {product["name"]}', callback_data=product['id'])]
         )
     keyboard.append([InlineKeyboardButton('🔠 В меню', callback_data='back')])
-    cart_summary = get_cart_summary(cart_products)
-    if cart_summary:
-        message = f'{cart_summary}*К оплате: {cart_cost}*'
-    else:
-        message = 'Здесь пока пусто.'
     query.message.reply_text(
-        message,
+        escape(get_cart_summary(cart_products, cart_cost)),
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=PARSEMODE_MARKDOWN_V2
     )
@@ -186,9 +195,15 @@ def handle_location(update, context, coordinates=None):
         longitude, latitude = coordinates
     else:
         longitude, latitude = update.message.location.longitude, update.message.location.latitude
+    moltin_client.add_entry_to_flow('customer_address', {
+        'customer_telegram_id': update.message.from_user.id,
+        'longitude': longitude,
+        'latitude': latitude
+    })
     pizzerias = moltin_client.get_pizzerias()
     define_delivery_distance(pizzerias, longitude, latitude)
     nearest_pizzeria = min(pizzerias, key=lambda p: p['delivery_distance'])
+    context.user_data['nearest_pizzeria'] = nearest_pizzeria
     keyboard = []
     if nearest_pizzeria['delivery_distance'] <= 0.5:
         keyboard.append([
@@ -255,7 +270,40 @@ def handle_address(update, context):
 
 
 def handle_delivery(update, context):
-    pass
+    moltin_client = context.bot_data['moltin_client']
+    query = update.callback_query
+    query.answer()
+    nearest_pizzeria = context.user_data['nearest_pizzeria']
+    keyboard = []
+    if query.data == 'pickup':
+        keyboard.append([InlineKeyboardButton('🆕 Новый заказ', callback_data='new_order')])
+        query.message.reply_text(
+            f'Ждём вас в пиццерии по адресу {nearest_pizzeria["address"]}',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        query.message.delete()
+        return HANDLE_FINISH
+    keyboard.append([InlineKeyboardButton('🆕 Новый заказ', callback_data='new_order')])
+    query.message.reply_text(
+        'Ваш заказ начали готовить!',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    query.message.delete()
+    deliveryman_telegram_id = moltin_client.get_deliveryman_telegram_id(nearest_pizzeria['id'])
+    cart_products, cart_cost = moltin_client.get_cart_data(query.from_user.id)
+    customer_location = moltin_client.get_customer_location(query.from_user.id)
+    context.bot.send_message(
+        deliveryman_telegram_id,
+        escape(get_cart_summary(cart_products, cart_cost)),
+        parse_mode=PARSEMODE_MARKDOWN_V2
+    )
+    context.bot.send_location(
+        deliveryman_telegram_id,
+        longitude=customer_location['longitude'],
+        latitude=customer_location['latitude']
+    )
+    moltin_client.empty_cart(query.from_user.id)
+    return HANDLE_FINISH
 
 
 def finish(update, context):
@@ -307,6 +355,9 @@ def main():
             HANDLE_DELIVERY: [
                 CallbackQueryHandler(ask_for_address, pattern='^change_address$'),
                 CallbackQueryHandler(handle_delivery)
+            ],
+            HANDLE_FINISH: [
+                CallbackQueryHandler(start_over, pattern='^new_order$')
             ],
         },
         fallbacks=[],

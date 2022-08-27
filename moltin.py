@@ -104,6 +104,27 @@ class MoltinClient:
         total_cart_cost = moltin_carts_response.json()['meta']['display_price']['with_tax']['formatted']
         return (cart_products, total_cart_cost)
 
+    def get_customer_location(self, telegram_user_id):
+        self.check_token()
+        moltin_flows_response = requests.get(
+            'https://api.moltin.com/v2/flows/customer_address/entries',
+            headers={'Authorization': f'Bearer {self.token}'}
+        )
+        moltin_flows_response.raise_for_status()
+        locations = moltin_flows_response.json()['data']
+        for location in locations:
+            if location['customer_telegram_id'] == telegram_user_id:
+                return location
+
+    def get_deliveryman_telegram_id(self, pizzeria_id):
+        self.check_token()
+        moltin_flows_response = requests.get(
+            f'https://api.moltin.com/v2/flows/pizzeria/entries/{pizzeria_id}',
+            headers={'Authorization': f'Bearer {self.token}'}
+        )
+        moltin_flows_response.raise_for_status()
+        return moltin_flows_response.json()['data']['deliveryman_telegram_id']
+
     def add_product_to_cart(self, product_id, product_quantity, telegram_user_id):
         self.check_token()
         moltin_carts_response = requests.post(
@@ -127,6 +148,14 @@ class MoltinClient:
         )
         moltin_carts_response.raise_for_status()
 
+    def empty_cart(self, telegram_user_id):
+        self.check_token()
+        moltin_carts_response = requests.delete(
+            f'https://api.moltin.com/v2/carts/{telegram_user_id}/items/',
+            headers={'Authorization': f'Bearer {self.token}'}
+        )
+        moltin_carts_response.raise_for_status()
+
     def save_customer(self, email, telegram_user):
         self.check_token()
         moltin_customers_response = requests.post(
@@ -142,3 +171,16 @@ class MoltinClient:
         )
         moltin_customers_response.raise_for_status()
         logger.info(moltin_customers_response.json())
+
+    def add_entry_to_flow(self, flow_slug, entry_data):
+        self.check_token()
+        entry_data['type'] = 'entry'
+        moltin_flows_response = requests.post(
+            f'https://api.moltin.com/v2/flows/{flow_slug}/entries',
+            headers={'Authorization': f'{self.token}'},
+            json={
+                'data': entry_data
+            }
+        )
+        moltin_flows_response.raise_for_status()
+        return moltin_flows_response.json()['data']['id']
