@@ -29,6 +29,15 @@ class MoltinClient:
         self.token = moltin_oauth_info['access_token']
         self.token_expiration_timestamp = moltin_oauth_info['expires']
 
+    def get_pizzerias(self):
+        self.check_token()
+        moltin_flows_response = requests.get(
+            'https://api.moltin.com/v2/flows/pizzeria/entries',
+            headers={'Authorization': f'Bearer {self.token}'}
+        )
+        moltin_flows_response.raise_for_status()
+        return moltin_flows_response.json()['data']
+
     def get_all_products(self):
         self.check_token()
         moltin_products_response = requests.get(

@@ -1,6 +1,7 @@
 import logging
 import os
 import requests
+from geopy import distance
 from moltin import MoltinClient
 from dotenv import load_dotenv
 from textwrap import dedent
@@ -19,7 +20,15 @@ from telegram.ext import (
 
 logger = logging.getLogger(__name__)
 
-START, HANDLE_MENU, HANDLE_PRODUCT, HANDLE_CART, AWAIT_EMAIL = range(5)
+START, HANDLE_MENU, HANDLE_PRODUCT, HANDLE_CART, AWAIT_LOCATION, HANDLE_DELIVERY = range(6)
+
+
+def define_delivery_distance(pizzerias, client_longitude, client_latitude):
+    for pizzeria in pizzerias:
+        pizzeria['delivery_distance'] = distance.distance(
+            (pizzeria['latitude'], pizzeria['longitude']),
+            (client_latitude, client_longitude)
+        ).km
 
 
 def get_cart_summary(products):
@@ -30,6 +39,24 @@ def get_cart_summary(products):
             {product["quantity"]} шт\. на сумму {product["total_cost"]}
             \n'''
     return dedent(summary)
+
+
+def fetch_coordinates(apikey, address):
+    base_url = 'https://geocode-maps.yandex.ru/1.x'
+    response = requests.get(base_url, params={
+        'geocode': address,
+        'apikey': apikey,
+        'format': 'json',
+    })
+    response.raise_for_status()
+    found_places = response.json()['response']['GeoObjectCollection']['featureMember']
+
+    if not found_places:
+        return None
+
+    most_relevant = found_places[0]
+    lon, lat = most_relevant['GeoObject']['Point']['pos'].split(' ')
+    return lon, lat
 
 
 def start(update, context):
@@ -68,7 +95,7 @@ def show_menu(update, context):
             InlineKeyboardButton('⬅️ Предыдущие', callback_data=f'page{page - 1}'),
             InlineKeyboardButton('Следующие ➡️', callback_data=f'page{page + 1}')
         ])
-    keyboard.append([InlineKeyboardButton('🛒 Корзина', callback_data='cart')])
+    keyboard.append([InlineKeyboardButton('🍕 Корзина', callback_data='cart')])
     query.message.reply_text(
         'Какую пиццу выберешь сегодня?',
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -90,9 +117,9 @@ def show_product(update, context):
         product = moltin_client.get_product(query.data)
         keyboard = []
         keyboard.append([
-            InlineKeyboardButton('📦 Заказать', callback_data=f'+{product["id"]}'),
-            InlineKeyboardButton('🛒 Корзина', callback_data='cart'),
-            InlineKeyboardButton('🍕 В меню', callback_data='back')
+            InlineKeyboardButton('💰 Заказать', callback_data=f'+{product["id"]}'),
+            InlineKeyboardButton('🍕 Корзина', callback_data='cart'),
+            InlineKeyboardButton('🔠 В меню', callback_data='back')
         ])
         message = f'''\
                 *{product["name"]} / {product["price"]}*
@@ -123,12 +150,12 @@ def show_cart(update, context):
         moltin_client.remove_product_from_cart(query.data, query.from_user.id)
     cart_products, cart_cost = moltin_client.get_cart_data(query.from_user.id)
     keyboard = []
-    keyboard.append([InlineKeyboardButton('🧾 Оплатить', callback_data='pay')])
+    keyboard.append([InlineKeyboardButton('🍕 Оформить заказ', callback_data='pay')])
     for product in cart_products:
         keyboard.append(
             [InlineKeyboardButton(f'Убрать из корзины {product["name"]}', callback_data=product['id'])]
         )
-    keyboard.append([InlineKeyboardButton('🍕 В меню', callback_data='back')])
+    keyboard.append([InlineKeyboardButton('🔠 В меню', callback_data='back')])
     cart_summary = get_cart_summary(cart_products)
     if cart_summary:
         message = f'{cart_summary}*К оплате: {cart_cost}*'
@@ -143,14 +170,92 @@ def show_cart(update, context):
     return HANDLE_CART
 
 
-def ask_for_email(update, context):
+def ask_for_address(update, context):
     query = update.callback_query
     query.answer()
     query.message.reply_text(
-        'Пожалуйста, введите email для оформления заказа'
+        'Пожалуйста, введите адрес для оформления заказа или пришлите геолокацию'
     )
     query.message.delete()
-    return AWAIT_EMAIL
+    return AWAIT_LOCATION
+
+
+def handle_location(update, context, coordinates=None):
+    moltin_client = context.bot_data['moltin_client']
+    if coordinates:
+        longitude, latitude = coordinates
+    else:
+        longitude, latitude = update.message.location.longitude, update.message.location.latitude
+    pizzerias = moltin_client.get_pizzerias()
+    define_delivery_distance(pizzerias, longitude, latitude)
+    nearest_pizzeria = min(pizzerias, key=lambda p: p['delivery_distance'])
+    keyboard = []
+    if nearest_pizzeria['delivery_distance'] <= 0.5:
+        keyboard.append([
+            InlineKeyboardButton('🚶 Заберу сам', callback_data='pickup'),
+            InlineKeyboardButton('🚴 Бесплатная доставка', callback_data='free_delivery')
+        ])
+        keyboard.append([InlineKeyboardButton('🏠 Изменить адрес', callback_data='change_address')])
+        update.message.reply_text(
+            f'Ближайшая пиццерия по адресу {nearest_pizzeria["address"]} '
+            f'всего в {nearest_pizzeria["delivery_distance"] * 1000:.0f} м от вас. '
+            f'Можем доставить бесплатно!',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    elif nearest_pizzeria['delivery_distance'] <= 5:
+        keyboard.append([
+            InlineKeyboardButton('🚗 Заберу сам', callback_data='pickup'),
+            InlineKeyboardButton('🚴 Доставка за 100 ₽', callback_data='paid_delivery_1')
+        ])
+        keyboard.append([InlineKeyboardButton('🏠 Изменить адрес', callback_data='change_address')])
+        update.message.reply_text(
+            f'Ближайшая пиццерия по адресу {nearest_pizzeria["address"]} '
+            f'находится в {nearest_pizzeria["delivery_distance"]:.0f} км от вас. '
+            f'Выберите доставку или самовывоз.',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    elif nearest_pizzeria['delivery_distance'] <= 20:
+        keyboard.append([
+            InlineKeyboardButton('🚗 Заберу сам', callback_data='pickup'),
+            InlineKeyboardButton('🚚 Доставка за 300 ₽', callback_data='paid_delivery_2')
+        ])
+        keyboard.append([InlineKeyboardButton('🏠 Изменить адрес', callback_data='change_address')])
+        update.message.reply_text(
+            f'Ближайшая пиццерия по адресу {nearest_pizzeria["address"]} '
+            f'находится в {nearest_pizzeria["delivery_distance"]:.0f} км от вас. '
+            f'Выберите доставку или самовывоз.',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    else:
+        keyboard.append([
+            InlineKeyboardButton('🚗 Заберу сам', callback_data='pickup'),
+            InlineKeyboardButton('🏠 Изменить адрес', callback_data='change_address')
+        ])
+        update.message.reply_text(
+            f'Ближайшая пиццерия находится в {nearest_pizzeria["delivery_distance"]:.0f} км от вас! '
+            f'Заберёте пиццу сами?',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    return HANDLE_DELIVERY
+
+
+def handle_address(update, context):
+    yandex_geocoder_api_key = context.bot_data['yandex_geocoder_api_key']
+    address = update.message.text
+    try:
+        coordinates = fetch_coordinates(yandex_geocoder_api_key, address)
+    except requests.exceptions.RequestException:
+        coordinates = None
+    if not coordinates:
+        update.message.reply_text(
+            'Не удалось распознать адрес, попробуйте другой.'
+        )
+        return AWAIT_LOCATION
+    return handle_location(update, context, coordinates)
+
+
+def handle_delivery(update, context):
+    pass
 
 
 def finish(update, context):
@@ -186,7 +291,7 @@ def main():
                 CallbackQueryHandler(show_product)
             ],
             HANDLE_CART: [
-                CallbackQueryHandler(ask_for_email, pattern='^pay$'),
+                CallbackQueryHandler(ask_for_address, pattern='^pay$'),
                 CallbackQueryHandler(show_menu, pattern='^back$'),
                 CallbackQueryHandler(show_cart)
             ],
@@ -195,9 +300,14 @@ def main():
                 CallbackQueryHandler(show_menu, pattern='^back$'),
                 CallbackQueryHandler(show_product)
             ],
-            AWAIT_EMAIL: [
-                MessageHandler(Filters.text & ~Filters.command, finish)
-            ]
+            AWAIT_LOCATION: [
+                MessageHandler(Filters.location, handle_location),
+                MessageHandler(Filters.text & ~Filters.command, handle_address)
+            ],
+            HANDLE_DELIVERY: [
+                CallbackQueryHandler(ask_for_address, pattern='^change_address$'),
+                CallbackQueryHandler(handle_delivery)
+            ],
         },
         fallbacks=[],
         name='pizzabot_conversation',
@@ -208,6 +318,7 @@ def main():
         os.getenv('MOLTIN_CLIENT_ID'),
         os.getenv('MOLTIN_CLIENT_SECRET')
     )
+    dispatcher.bot_data['yandex_geocoder_api_key'] = os.getenv('YANDEX_GEOCODER_API_KEY')
     dispatcher.bot_data['products_per_page'] = 5
     dispatcher.add_handler(conv_handler)
 
