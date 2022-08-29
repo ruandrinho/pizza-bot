@@ -12,6 +12,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     ConversationHandler,
+    JobQueue,
     MessageHandler,
     PicklePersistence,
     Updater,
@@ -303,17 +304,20 @@ def handle_delivery(update, context):
         latitude=customer_location['latitude']
     )
     moltin_client.empty_cart(query.from_user.id)
+    context.job_queue.run_once(notify_after_delivery, 3600, context=query.from_user.id)
     return HANDLE_FINISH
 
 
-def finish(update, context):
-    moltin_client = context.bot_data['moltin_client']
-    email = update.message.text
-    update.message.reply_text(
-        f'Вы прислали почту {email}. Скоро с вами свяжутся наши менеджеры!'
+def notify_after_delivery(context):
+    message = '''\
+        Приятного аппетита! *место для рекламы*
+
+        *сообщение что делать, если пицца не пришла*
+        '''
+    context.bot.send_message(
+        context.job.context,
+        dedent(message)
     )
-    moltin_client.save_customer(email, update.message.from_user)
-    return HANDLE_MENU
 
 
 def main():
