@@ -6,22 +6,31 @@ from moltin import MoltinClient
 from dotenv import load_dotenv
 from textwrap import dedent
 from contextlib import suppress
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from telegram.constants import PARSEMODE_MARKDOWN_V2
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     ConversationHandler,
-    JobQueue,
     MessageHandler,
     PicklePersistence,
+    PreCheckoutQueryHandler,
     Updater,
     Filters,
 )
 
 logger = logging.getLogger(__name__)
 
-START, HANDLE_MENU, HANDLE_PRODUCT, HANDLE_CART, AWAIT_LOCATION, HANDLE_DELIVERY, HANDLE_FINISH = range(7)
+(
+    START,
+    HANDLE_MENU,
+    HANDLE_PRODUCT,
+    HANDLE_CART,
+    AWAIT_LOCATION,
+    HANDLE_DELIVERY,
+    HANDLE_PAYMENT,
+    HANDLE_FINISH
+) = range(8)
 
 
 def define_delivery_distance(pizzerias, client_longitude, client_latitude):
@@ -80,10 +89,6 @@ def start(update, context):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     return HANDLE_MENU
-
-
-def start_over(update, context):
-    pass
 
 
 def show_menu(update, context):
@@ -271,28 +276,76 @@ def handle_address(update, context):
 
 
 def handle_delivery(update, context):
-    moltin_client = context.bot_data['moltin_client']
     query = update.callback_query
     query.answer()
-    nearest_pizzeria = context.user_data['nearest_pizzeria']
+    context.user_data['delivery_type'] = 'pickup' if query.data == 'pickup' else query.data
     keyboard = []
-    if query.data == 'pickup':
-        keyboard.append([InlineKeyboardButton('🆕 Новый заказ', callback_data='new_order')])
-        query.message.reply_text(
-            f'Ждём вас в пиццерии по адресу {nearest_pizzeria["address"]}',
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        query.message.delete()
-        return HANDLE_FINISH
-    keyboard.append([InlineKeyboardButton('🆕 Новый заказ', callback_data='new_order')])
+    keyboard.append([InlineKeyboardButton('💳 Оплатить', callback_data='pay')])
     query.message.reply_text(
-        'Ваш заказ начали готовить!',
+        'Приготовьте данные вашей карты',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     query.message.delete()
+    return HANDLE_PAYMENT
+
+
+def handle_payment(update, context):
+    moltin_client = context.bot_data['moltin_client']
+    query = update.callback_query
+    query.answer()
+    cart_products, _ = moltin_client.get_cart_data(query.from_user.id)
+    prices = []
+    for product in cart_products:
+        if product['quantity'] > 1:
+            product['name'] += f' ({product["quantity"]} шт.)'
+        product['total_cost'] = int(product['total_cost'].replace(' ₽', ''))
+        prices.append(LabeledPrice(product['name'], product['total_cost'] * 100))
+    if context.user_data['delivery_type'] != 'pickup':
+        if context.user_data['delivery_type'] == 'free_delivery':
+            delivery_cost = 0
+        elif context.user_data['delivery_type'] == 'paid_delivery_1':
+            delivery_cost = 100
+        else:
+            delivery_cost = 300
+        prices.append(LabeledPrice('Доставка', delivery_cost * 100))
+    context.bot.send_invoice(
+        query.from_user.id,
+        'Оплата пиццы',
+        ' ',
+        'pizzabot_payment',
+        context.bot_data['payment_provider_token'],
+        'RUB',
+        prices
+    )
+    return HANDLE_PAYMENT
+
+
+def handle_precheckout(update, context):
+    query = update.pre_checkout_query
+    if query.invoice_payload != 'pizzabot_payment':
+        query.answer(ok=False, error_message='В процессе оплаты произошла ошибка')
+    else:
+        query.answer(ok=True)
+    return HANDLE_PAYMENT
+
+
+def handle_successful_payment(update, context):
+    moltin_client = context.bot_data['moltin_client']
+    nearest_pizzeria = context.user_data['nearest_pizzeria']
+    if context.user_data['delivery_type'] == 'pickup':
+        message = f'Спасибо за оплату! Ждём вас в пиццерии по адресу {nearest_pizzeria["address"]}'
+    else:
+        message = 'Спасибо за оплату! Ждите нашего курьера.'
+    keyboard = []
+    keyboard.append([InlineKeyboardButton('🆕 Новый заказ', callback_data='new_order')])
+    update.message.reply_text(
+        message,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
     deliveryman_telegram_id = moltin_client.get_deliveryman_telegram_id(nearest_pizzeria['id'])
-    cart_products, cart_cost = moltin_client.get_cart_data(query.from_user.id)
-    customer_location = moltin_client.get_customer_location(query.from_user.id)
+    user_id = update.message.from_user.id
+    cart_products, cart_cost = moltin_client.get_cart_data(user_id)
+    customer_location = moltin_client.get_customer_location(user_id)
     context.bot.send_message(
         deliveryman_telegram_id,
         escape(get_cart_summary(cart_products, cart_cost)),
@@ -303,12 +356,12 @@ def handle_delivery(update, context):
         longitude=customer_location['longitude'],
         latitude=customer_location['latitude']
     )
-    moltin_client.empty_cart(query.from_user.id)
-    context.job_queue.run_once(notify_after_delivery, 3600, context=query.from_user.id)
+    moltin_client.empty_cart(user_id)
+    context.job_queue.run_once(notify_after_delivery_expiration, 3600, context=user_id)
     return HANDLE_FINISH
 
 
-def notify_after_delivery(context):
+def notify_after_delivery_expiration(context):
     message = '''\
         Приятного аппетита! *место для рекламы*
 
@@ -360,8 +413,12 @@ def main():
                 CallbackQueryHandler(ask_for_address, pattern='^change_address$'),
                 CallbackQueryHandler(handle_delivery)
             ],
+            HANDLE_PAYMENT: [
+                CallbackQueryHandler(handle_payment, pattern='^pay$'),
+                MessageHandler(Filters.successful_payment, handle_successful_payment)
+            ],
             HANDLE_FINISH: [
-                CallbackQueryHandler(start_over, pattern='^new_order$')
+                CallbackQueryHandler(start, pattern='^new_order$')
             ],
         },
         fallbacks=[],
@@ -373,9 +430,11 @@ def main():
         os.getenv('MOLTIN_CLIENT_ID'),
         os.getenv('MOLTIN_CLIENT_SECRET')
     )
+    dispatcher.bot_data['payment_provider_token'] = os.getenv('TELEGRAM_PAYMENT_PROVIDER_TOKEN')
     dispatcher.bot_data['yandex_geocoder_api_key'] = os.getenv('YANDEX_GEOCODER_API_KEY')
     dispatcher.bot_data['products_per_page'] = 5
     dispatcher.add_handler(conv_handler)
+    dispatcher.add_handler(PreCheckoutQueryHandler(handle_precheckout))
 
     updater.start_polling()
     updater.idle()
