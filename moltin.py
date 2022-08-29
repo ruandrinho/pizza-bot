@@ -29,14 +29,41 @@ class MoltinClient:
         self.token = moltin_oauth_info['access_token']
         self.token_expiration_timestamp = moltin_oauth_info['expires']
 
-    def get_pizzerias(self):
+    def add_entry_to_flow(self, flow_slug, entry_data):
         self.check_token()
-        moltin_flows_response = requests.get(
-            'https://api.moltin.com/v2/flows/pizzeria/entries',
-            headers={'Authorization': f'Bearer {self.token}'}
+        entry_data['type'] = 'entry'
+        moltin_flows_response = requests.post(
+            f'https://api.moltin.com/v2/flows/{flow_slug}/entries',
+            headers={'Authorization': f'{self.token}'},
+            json={
+                'data': entry_data
+            }
         )
         moltin_flows_response.raise_for_status()
-        return moltin_flows_response.json()['data']
+        return moltin_flows_response.json()['data']['id']
+
+    def add_product_to_cart(self, product_id, product_quantity, telegram_user_id):
+        self.check_token()
+        moltin_carts_response = requests.post(
+            f'https://api.moltin.com/v2/carts/{telegram_user_id}/items',
+            headers={'Authorization': f'Bearer {self.token}'},
+            json={
+                'data': {
+                    'id': product_id,
+                    'type': 'cart_item',
+                    'quantity': product_quantity
+                }
+            }
+        )
+        moltin_carts_response.raise_for_status()
+
+    def empty_cart(self, telegram_user_id):
+        self.check_token()
+        moltin_carts_response = requests.delete(
+            f'https://api.moltin.com/v2/carts/{telegram_user_id}/items/',
+            headers={'Authorization': f'Bearer {self.token}'}
+        )
+        moltin_carts_response.raise_for_status()
 
     def get_all_products(self):
         self.check_token()
@@ -46,45 +73,6 @@ class MoltinClient:
         )
         moltin_products_response.raise_for_status()
         return moltin_products_response.json()['data']
-
-    def get_product(self, product_id):
-        self.check_token()
-        moltin_products_response = requests.get(
-            f'https://api.moltin.com/v2/products/{product_id}',
-            headers={'Authorization': f'Bearer {self.token}'}
-        )
-        moltin_products_response.raise_for_status()
-        moltin_product = moltin_products_response.json()['data']
-
-        main_image_id = moltin_product['relationships']['main_image']['data']['id']
-        moltin_files_response = requests.get(
-            f'https://api.moltin.com/v2/files/{main_image_id}',
-            headers={'Authorization': f'Bearer {self.token}'}
-        )
-        moltin_files_response.raise_for_status()
-        moltin_file = moltin_files_response.json()['data']
-
-        return {
-            'id': moltin_product['id'],
-            'name': moltin_product['name'],
-            'description': moltin_product['description'],
-            'price': moltin_product['meta']['display_price']['with_tax']['formatted'],
-            'stock': moltin_product['meta']['stock']['level'],
-            'image_url': moltin_file['link']['href']
-        }
-
-    def get_product_quantity_in_cart(self, product_name, telegram_user_id):
-        self.check_token()
-        moltin_carts_response = requests.get(
-            f'https://api.moltin.com/v2/carts/{telegram_user_id}/items',
-            headers={'Authorization': f'Bearer {self.token}'}
-        )
-        moltin_carts_response.raise_for_status()
-        cart_products = moltin_carts_response.json()['data']
-        for product in cart_products:
-            if product['name'] == product_name:
-                return product['quantity']
-        return 0
 
     def get_cart_data(self, telegram_user_id):
         self.check_token()
@@ -125,33 +113,59 @@ class MoltinClient:
         moltin_flows_response.raise_for_status()
         return moltin_flows_response.json()['data']['deliveryman_telegram_id']
 
-    def add_product_to_cart(self, product_id, product_quantity, telegram_user_id):
+    def get_pizzerias(self):
         self.check_token()
-        moltin_carts_response = requests.post(
+        moltin_flows_response = requests.get(
+            'https://api.moltin.com/v2/flows/pizzeria/entries',
+            headers={'Authorization': f'Bearer {self.token}'}
+        )
+        moltin_flows_response.raise_for_status()
+        return moltin_flows_response.json()['data']
+
+    def get_product(self, product_id, telegram_user_id):
+        self.check_token()
+        moltin_products_response = requests.get(
+            f'https://api.moltin.com/v2/products/{product_id}',
+            headers={'Authorization': f'Bearer {self.token}'}
+        )
+        moltin_products_response.raise_for_status()
+        moltin_product = moltin_products_response.json()['data']
+
+        main_image_id = moltin_product['relationships']['main_image']['data']['id']
+        moltin_files_response = requests.get(
+            f'https://api.moltin.com/v2/files/{main_image_id}',
+            headers={'Authorization': f'Bearer {self.token}'}
+        )
+        moltin_files_response.raise_for_status()
+        moltin_file = moltin_files_response.json()['data']
+
+        return {
+            'id': moltin_product['id'],
+            'name': moltin_product['name'],
+            'description': moltin_product['description'],
+            'price': moltin_product['meta']['display_price']['with_tax']['formatted'],
+            'stock': moltin_product['meta']['stock']['level'],
+            'image_url': moltin_file['link']['href'],
+            'quantity_in_cart': self.get_product_quantity_in_cart(moltin_product['name'], telegram_user_id)
+        }
+
+    def get_product_quantity_in_cart(self, product_name, telegram_user_id):
+        self.check_token()
+        moltin_carts_response = requests.get(
             f'https://api.moltin.com/v2/carts/{telegram_user_id}/items',
-            headers={'Authorization': f'Bearer {self.token}'},
-            json={
-                'data': {
-                    'id': product_id,
-                    'type': 'cart_item',
-                    'quantity': product_quantity
-                }
-            }
+            headers={'Authorization': f'Bearer {self.token}'}
         )
         moltin_carts_response.raise_for_status()
+        cart_products = moltin_carts_response.json()['data']
+        for product in cart_products:
+            if product['name'] == product_name:
+                return product['quantity']
+        return 0
 
     def remove_product_from_cart(self, product_id, telegram_user_id):
         self.check_token()
         moltin_carts_response = requests.delete(
             f'https://api.moltin.com/v2/carts/{telegram_user_id}/items/{product_id}',
-            headers={'Authorization': f'Bearer {self.token}'}
-        )
-        moltin_carts_response.raise_for_status()
-
-    def empty_cart(self, telegram_user_id):
-        self.check_token()
-        moltin_carts_response = requests.delete(
-            f'https://api.moltin.com/v2/carts/{telegram_user_id}/items/',
             headers={'Authorization': f'Bearer {self.token}'}
         )
         moltin_carts_response.raise_for_status()
@@ -171,16 +185,3 @@ class MoltinClient:
         )
         moltin_customers_response.raise_for_status()
         logger.info(moltin_customers_response.json())
-
-    def add_entry_to_flow(self, flow_slug, entry_data):
-        self.check_token()
-        entry_data['type'] = 'entry'
-        moltin_flows_response = requests.post(
-            f'https://api.moltin.com/v2/flows/{flow_slug}/entries',
-            headers={'Authorization': f'{self.token}'},
-            json={
-                'data': entry_data
-            }
-        )
-        moltin_flows_response.raise_for_status()
-        return moltin_flows_response.json()['data']['id']
