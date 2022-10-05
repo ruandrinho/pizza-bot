@@ -40,8 +40,25 @@ def webhook():
 
 
 def send_menu(recipient_id):
+    elements = [
+        {
+            'title': 'Меню',
+            'image_url': 'https://img.freepik.com/vektoren-premium/pizza-logo-design-vorlage_15146-192.jpg',
+            'buttons': [
+                {
+                    'type': 'postback',
+                    'title': '🍕 Корзина',
+                    'payload': 'cart'
+                },
+                {
+                    'type': 'postback',
+                    'title': '🔥 Акции',
+                    'payload': 'actions'
+                }
+            ]            
+        }
+    ]
     all_products = g.moltin_client.get_all_products()[:5]
-    elements = []
     for product in all_products:
         product = g.moltin_client.get_product(product['id'], recipient_id)
         elements.append({
