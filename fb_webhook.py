@@ -9,6 +9,7 @@ env = Env()
 env.read_env()
 FACEBOOK_TOKEN = env("PAGE_ACCESS_TOKEN")
 
+
 @app.route('/', methods=['GET'])
 def verify():
     """
@@ -33,7 +34,6 @@ def webhook():
             for messaging_event in entry["messaging"]:
                 if messaging_event.get("message"):
                     sender_id = messaging_event["sender"]["id"]
-                    recipient_id = messaging_event["recipient"]["id"]
                     message_text = messaging_event["message"]["text"]
                     send_message(sender_id, message_text)
     return "ok", 200
