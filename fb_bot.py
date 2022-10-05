@@ -55,10 +55,10 @@ def send_menu(recipient_id):
                     'title': '🔥 Акции',
                     'payload': 'actions'
                 }
-            ]            
+            ]
         }
     ]
-    all_products = g.moltin_client.get_all_products()[:5]
+    all_products = g.moltin_client.get_products_by_category('basic')
     for product in all_products:
         product = g.moltin_client.get_product(product['id'], recipient_id)
         elements.append({
@@ -73,6 +73,21 @@ def send_menu(recipient_id):
                 }
             ]
         })
+    categories_buttons = []
+    for category in g.moltin_client.get_categories():
+        if category['slug'] == 'basic':
+            continue
+        categories_buttons.append({
+            'type': 'postback',
+            'title': category['name'],
+            'payload': category['slug']
+        })
+    elements.append({
+        'title': 'Не нашли нужную пиццу?',
+        'image_url': 'https://primepizza.ru/uploads/position/large_0c07c6fd5c4dcadddaf4a2f1a2c218760b20c396.jpg',
+        'subtitle': 'Выберите категорию',
+        'buttons': categories_buttons
+    })
     params = {'access_token': g.facebook_token}
     headers = {'Content-Type': 'application/json'}
     request_content = {

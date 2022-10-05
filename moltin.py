@@ -92,6 +92,15 @@ class MoltinClient:
         total_cart_cost = moltin_carts_response.json()['meta']['display_price']['with_tax']['formatted']
         return (cart_products, total_cart_cost)
 
+    def get_categories(self):
+        self.check_token()
+        moltin_categories_response = requests.get(
+            'https://api.moltin.com/v2/categories',
+            headers={'Authorization': f'Bearer {self.token}'}
+        )
+        moltin_categories_response.raise_for_status()
+        return moltin_categories_response.json()['data']
+
     def get_customer_location(self, telegram_user_id):
         self.check_token()
         moltin_flows_response = requests.get(
@@ -161,6 +170,16 @@ class MoltinClient:
             if product['name'] == product_name:
                 return product['quantity']
         return 0
+
+    def get_products_by_category(self, category_slug='basic'):
+        self.check_token()
+        moltin_categories_map = {c['slug']: c['id'] for c in self.get_categories()}
+        moltin_products_response = requests.get(
+            f'https://api.moltin.com/v2/products?filter=eq(category.id,{moltin_categories_map[category_slug]})',
+            headers={'Authorization': f'Bearer {self.token}'}
+        )
+        moltin_products_response.raise_for_status()
+        return moltin_products_response.json()['data']
 
     def remove_product_from_cart(self, product_id, telegram_user_id):
         self.check_token()
