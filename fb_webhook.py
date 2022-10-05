@@ -1,5 +1,3 @@
-import os
-
 import requests
 from environs import Env
 from flask import Flask, request
@@ -7,7 +5,7 @@ from flask import Flask, request
 app = Flask(__name__)
 env = Env()
 env.read_env()
-FACEBOOK_TOKEN = env("PAGE_ACCESS_TOKEN")
+FACEBOOK_TOKEN = env("FACEBOOK_ACCESS_TOKEN")
 
 
 @app.route('/', methods=['GET'])
@@ -16,7 +14,7 @@ def verify():
     При верификации вебхука у Facebook он отправит запрос на этот адрес. На него нужно ответить VERIFY_TOKEN.
     """
     if request.args.get("hub.mode") == "subscribe" and request.args.get("hub.challenge"):
-        if not request.args.get("hub.verify_token") == os.environ["VERIFY_TOKEN"]:
+        if not request.args.get("hub.verify_token") == env("FACEBOOK_VERIFY_TOKEN"):
             return "Verification token mismatch", 403
         return request.args["hub.challenge"], 200
 
