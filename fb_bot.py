@@ -37,19 +37,22 @@ def webhook():
     if data['object'] == 'page':
         for entry in data['entry']:
             for messaging_event in entry['messaging']:
+                sender_id = messaging_event['sender']['id']
+                message_text, postback_payload = '', ''
                 if messaging_event.get('message'):
-                    sender_id = messaging_event['sender']['id']
                     message_text = messaging_event['message']['text']
-                    handle_users_reply(sender_id, message_text)
+                if messaging_event.get('postback'):
+                    postback_payload = messaging_event['postback']['payload']
+                handle_users_reply(sender_id, message_text, postback_payload)
     return 'ok', 200
 
 
-def handle_start(sender_id, message_text):
-    send_menu(sender_id)
+def handle_start(sender_id, message_text, postback_payload):
+    send_menu(sender_id, postback_payload)
     return 'START'
 
 
-def handle_users_reply(sender_id, message_text):
+def handle_users_reply(sender_id, message_text, postback_payload):
     states_functions = {
         'START': handle_start,
     }
@@ -61,11 +64,11 @@ def handle_users_reply(sender_id, message_text):
     if message_text == '/start':
         user_state = 'START'
     state_handler = states_functions[user_state]
-    next_state = state_handler(sender_id, message_text)
+    next_state = state_handler(sender_id, message_text, postback_payload)
     g.redis.set(f'facebookid_{sender_id}', next_state)
 
 
-def get_menu_elements(recipient_id):
+def get_menu_elements(recipient_id, category_slug='basic'):
     elements = [
         {
             'title': 'Меню',
@@ -84,7 +87,7 @@ def get_menu_elements(recipient_id):
             ]
         }
     ]
-    for product in g.moltin_client.get_products_by_category('basic'):
+    for product in g.moltin_client.get_products_by_category(category_slug):
         product = g.moltin_client.get_product(product['id'], recipient_id)
         elements.append({
             'title': f'{product["name"]} ({product["price"]})',
@@ -100,7 +103,7 @@ def get_menu_elements(recipient_id):
         })
     categories_buttons = []
     for category in g.moltin_client.get_categories():
-        if category['slug'] == 'basic':
+        if category['slug'] == category_slug:
             continue
         categories_buttons.append({
             'type': 'postback',
@@ -116,7 +119,7 @@ def get_menu_elements(recipient_id):
     return elements
 
 
-def send_menu(recipient_id):
+def send_menu(recipient_id, category_slug='basic'):
     params = {'access_token': g.facebook_token}
     headers = {'Content-Type': 'application/json'}
     request_content = {
@@ -128,7 +131,7 @@ def send_menu(recipient_id):
                 'type': 'template',
                 'payload': {
                     'template_type': 'generic',
-                    'elements': get_menu_elements(recipient_id)
+                    'elements': get_menu_elements(recipient_id, category_slug if category_slug else 'basic')
                 }
             }
         }
