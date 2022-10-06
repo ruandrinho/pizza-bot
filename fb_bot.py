@@ -1,5 +1,6 @@
 import requests
 
+import redis
 from environs import Env
 from flask import Flask, request, g
 
@@ -15,6 +16,10 @@ env.read_env()
 def config():
     g.facebook_token = env('FACEBOOK_ACCESS_TOKEN')
     g.moltin_client = MoltinClient(env('MOLTIN_CLIENT_ID'), env('MOLTIN_CLIENT_SECRET'))
+    g.redis = redis.Redis(
+        'redis-12339.c293.eu-central-1-1.ec2.cloud.redislabs.com',
+        port=12339, username='default', password=env('REDIS_PASSWORD'), decode_responses=True
+    )
 
 
 @app.route('/', methods=['GET'])
@@ -34,12 +39,33 @@ def webhook():
             for messaging_event in entry['messaging']:
                 if messaging_event.get('message'):
                     sender_id = messaging_event['sender']['id']
-                    # message_text = messaging_event['message']['text']
-                    send_menu(sender_id)
+                    message_text = messaging_event['message']['text']
+                    handle_users_reply(sender_id, message_text)
     return 'ok', 200
 
 
-def send_menu(recipient_id):
+def handle_start(sender_id, message_text):
+    send_menu(sender_id)
+    return 'START'
+
+
+def handle_users_reply(sender_id, message_text):
+    states_functions = {
+        'START': handle_start,
+    }
+    recorded_state = g.redis.get(f'facebookid_{sender_id}')
+    if not recorded_state or recorded_state not in states_functions.keys():
+        user_state = 'START'
+    else:
+        user_state = recorded_state
+    if message_text == '/start':
+        user_state = 'START'
+    state_handler = states_functions[user_state]
+    next_state = state_handler(sender_id, message_text)
+    g.redis.set(f'facebookid_{sender_id}', next_state)
+
+
+def get_menu_elements(recipient_id):
     elements = [
         {
             'title': 'Меню',
@@ -58,8 +84,7 @@ def send_menu(recipient_id):
             ]
         }
     ]
-    all_products = g.moltin_client.get_products_by_category('basic')
-    for product in all_products:
+    for product in g.moltin_client.get_products_by_category('basic'):
         product = g.moltin_client.get_product(product['id'], recipient_id)
         elements.append({
             'title': f'{product["name"]} ({product["price"]})',
@@ -88,6 +113,10 @@ def send_menu(recipient_id):
         'subtitle': 'Выберите категорию',
         'buttons': categories_buttons
     })
+    return elements
+
+
+def send_menu(recipient_id):
     params = {'access_token': g.facebook_token}
     headers = {'Content-Type': 'application/json'}
     request_content = {
@@ -99,7 +128,7 @@ def send_menu(recipient_id):
                 'type': 'template',
                 'payload': {
                     'template_type': 'generic',
-                    'elements': elements
+                    'elements': get_menu_elements(recipient_id)
                 }
             }
         }
