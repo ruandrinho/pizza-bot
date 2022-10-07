@@ -49,7 +49,7 @@ def webhook():
 
 
 def handle_start(sender_id, message_text, postback_payload):
-    if postback_payload not in ['basic', 'special', 'spicy', 'nourishing']:
+    if postback_payload not in [category['slug'] for category in g.moltin.get_categories()]:
         postback_payload = 'basic'
     send_menu(sender_id, postback_payload)
     return 'MENU'
