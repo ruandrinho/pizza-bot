@@ -1,3 +1,4 @@
+import json
 import requests
 from contextlib import suppress
 
@@ -49,7 +50,7 @@ def webhook():
 
 
 def handle_start(sender_id, message_text, postback_payload):
-    if postback_payload not in [category['slug'] for category in g.moltin.get_categories()]:
+    if postback_payload not in [category['slug'] for category in g.moltin_client.get_categories()]:
         postback_payload = 'basic'
     send_menu(sender_id, postback_payload)
     return 'MENU'
@@ -59,13 +60,16 @@ def handle_menu(sender_id, message_text, postback_payload):
     if postback_payload == 'cart':
         send_cart(sender_id)
         return 'CART'
+    if postback_payload == 'actions':
+        return 'MENU'
     if '+' in postback_payload:
         product_id = postback_payload.replace('+', '')
         with suppress(requests.exceptions.HTTPError):
             g.moltin_client.add_product_to_cart(product_id, 1, f'facebookid_{sender_id}')
         product = g.moltin_client.get_product(product_id, sender_id)
         send_message(sender_id, f'Пицца «{product["name"]}» добавлена в корзину')
-    return 'MENU'
+        return 'MENU'
+    return handle_start(sender_id, message_text, postback_payload)
 
 
 def handle_cart(sender_id, message_text, postback_payload):
@@ -108,55 +112,11 @@ def handle_users_reply(sender_id, message_text, postback_payload):
     redis_client.set(f'facebookid_{sender_id}', next_state)
 
 
-def get_menu_elements(recipient_id, category_slug='basic'):
-    elements = [
-        {
-            'title': 'Меню',
-            'image_url': 'https://img.freepik.com/vektoren-premium/pizza-logo-design-vorlage_15146-192.jpg',
-            'buttons': [
-                {
-                    'type': 'postback',
-                    'title': '🍕 Корзина',
-                    'payload': 'cart'
-                },
-                {
-                    'type': 'postback',
-                    'title': '🔥 Акции',
-                    'payload': 'actions'
-                }
-            ]
-        }
-    ]
-    for product in g.moltin_client.get_products_by_category(category_slug):
-        product = g.moltin_client.get_product(product['id'], f'facebookid_{recipient_id}')
-        elements.append({
-            'title': f'{product["name"]} ({product["price"]})',
-            'image_url': product['image_url'],
-            'subtitle': product['description'],
-            'buttons': [
-                {
-                    'type': 'postback',
-                    'title': '➕ Добавить в корзину',
-                    'payload': f'+{product["id"]}'
-                }
-            ]
-        })
-    categories_buttons = []
-    for category in g.moltin_client.get_categories():
-        if category['slug'] == category_slug:
-            continue
-        categories_buttons.append({
-            'type': 'postback',
-            'title': category['name'],
-            'payload': category['slug']
-        })
-    elements.append({
-        'title': 'Не нашли нужную пиццу?',
-        'image_url': 'https://primepizza.ru/uploads/position/large_0c07c6fd5c4dcadddaf4a2f1a2c218760b20c396.jpg',
-        'subtitle': 'Выберите категорию',
-        'buttons': categories_buttons
-    })
-    return elements
+def get_menu_elements(category_slug='basic'):
+    elements = redis_client.get(f'elements_{category_slug}')
+    if elements:
+        return json.loads(elements)
+    return
 
 
 def send_menu(recipient_id, category_slug='basic'):
@@ -171,7 +131,7 @@ def send_menu(recipient_id, category_slug='basic'):
                 'type': 'template',
                 'payload': {
                     'template_type': 'generic',
-                    'elements': get_menu_elements(recipient_id, category_slug if category_slug else 'basic')
+                    'elements': get_menu_elements(category_slug if category_slug else 'basic')
                 }
             }
         }

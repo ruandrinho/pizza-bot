@@ -133,7 +133,7 @@ class MoltinClient:
         moltin_flows_response.raise_for_status()
         return moltin_flows_response.json()['data']
 
-    def get_product(self, product_id, telegram_user_id):
+    def get_product(self, product_id, telegram_user_id=0):
         self.check_token()
         moltin_products_response = requests.get(
             f'https://api.moltin.com/v2/products/{product_id}',
@@ -150,6 +150,9 @@ class MoltinClient:
         moltin_files_response.raise_for_status()
         moltin_file = moltin_files_response.json()['data']
 
+        quantity_in_cart = self.get_product_quantity_in_cart(moltin_product['name'], telegram_user_id)\
+            if telegram_user_id else 0
+
         return {
             'id': moltin_product['id'],
             'name': moltin_product['name'],
@@ -157,7 +160,7 @@ class MoltinClient:
             'price': moltin_product['meta']['display_price']['with_tax']['formatted'],
             'stock': moltin_product['meta']['stock']['level'],
             'image_url': moltin_file['link']['href'],
-            'quantity_in_cart': self.get_product_quantity_in_cart(moltin_product['name'], telegram_user_id)
+            'quantity_in_cart': quantity_in_cart
         }
 
     def get_product_quantity_in_cart(self, product_name, telegram_user_id):
