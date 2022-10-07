@@ -4,7 +4,7 @@ from contextlib import suppress
 
 import redis
 from environs import Env
-from flask import Flask, request, g
+from flask import Flask, request
 
 from moltin import MoltinClient
 
@@ -12,22 +12,12 @@ env = Env()
 env.read_env()
 
 app = Flask(__name__)
-redis_client = redis.Redis(
-    'redis-12339.c293.eu-central-1-1.ec2.cloud.redislabs.com',
-    port=12339, username='default', password=env('REDIS_PASSWORD'), decode_responses=True
-)
-
-
-@app.before_request
-def config():
-    g.facebook_token = env('FACEBOOK_ACCESS_TOKEN')
-    g.moltin_client = MoltinClient(env('MOLTIN_CLIENT_ID'), env('MOLTIN_CLIENT_SECRET'))
 
 
 @app.route('/', methods=['GET'])
 def verify():
     if request.args.get('hub.mode') == 'subscribe' and request.args.get('hub.challenge'):
-        if not request.args.get('hub.verify_token') == env('FACEBOOK_VERIFY_TOKEN'):
+        if not request.args.get('hub.verify_token') == app.config['facebook_verify_token']:
             return 'Verification token mismatch', 403
         return request.args['hub.challenge'], 200
     return 'Hello world', 200
@@ -50,13 +40,15 @@ def webhook():
 
 
 def handle_start(sender_id, message_text, postback_payload):
-    if postback_payload not in [category['slug'] for category in g.moltin_client.get_categories()]:
+    moltin_client = app.config['moltin_client']
+    if postback_payload not in [category['slug'] for category in moltin_client.get_categories()]:
         postback_payload = 'basic'
     send_menu(sender_id, postback_payload)
     return 'MENU'
 
 
 def handle_menu(sender_id, message_text, postback_payload):
+    moltin_client = app.config['moltin_client']
     if postback_payload == 'cart':
         send_cart(sender_id)
         return 'CART'
@@ -65,35 +57,37 @@ def handle_menu(sender_id, message_text, postback_payload):
     if '+' in postback_payload:
         product_id = postback_payload.replace('+', '')
         with suppress(requests.exceptions.HTTPError):
-            g.moltin_client.add_product_to_cart(product_id, 1, f'facebookid_{sender_id}')
-        product = g.moltin_client.get_product(product_id, sender_id)
+            moltin_client.add_product_to_cart(product_id, 1, f'facebookid_{sender_id}')
+        product = moltin_client.get_product(product_id, sender_id)
         send_message(sender_id, f'Пицца «{product["name"]}» добавлена в корзину')
         return 'MENU'
     return handle_start(sender_id, message_text, postback_payload)
 
 
 def handle_cart(sender_id, message_text, postback_payload):
+    moltin_client = app.config['moltin_client']
     if postback_payload == 'back':
         send_menu(sender_id)
         return 'MENU'
     if '+' in postback_payload:
         product_id = postback_payload.replace('+', '')
         with suppress(requests.exceptions.HTTPError):
-            g.moltin_client.add_product_to_cart(product_id, 1, f'facebookid_{sender_id}')
-        product = g.moltin_client.get_product(product_id, sender_id)
+            moltin_client.add_product_to_cart(product_id, 1, f'facebookid_{sender_id}')
+        product = moltin_client.get_product(product_id, sender_id)
         send_message(sender_id, f'Ещё одна пицца «{product["name"]}» добавлена в корзину')
         send_cart(sender_id)
     if '×' in postback_payload:
         product_id = postback_payload.replace('×', '')
         with suppress(requests.exceptions.HTTPError):
-            g.moltin_client.remove_product_from_cart(product_id, f'facebookid_{sender_id}')
-        product = g.moltin_client.get_product(product_id, sender_id)
+            moltin_client.remove_product_from_cart(product_id, f'facebookid_{sender_id}')
+        product = moltin_client.get_product(product_id, sender_id)
         send_message(sender_id, f'Пицца «{product["name"]}» удалена из корзины')
         send_cart(sender_id)
     return 'CART'
 
 
 def handle_users_reply(sender_id, message_text, postback_payload):
+    redis_client = app.config['redis_client']
     states_functions = {
         'START': handle_start,
         'MENU': handle_menu,
@@ -113,6 +107,7 @@ def handle_users_reply(sender_id, message_text, postback_payload):
 
 
 def get_menu_elements(category_slug='basic'):
+    redis_client = app.config['redis_client']
     elements = redis_client.get(f'elements_{category_slug}')
     if elements:
         return json.loads(elements)
@@ -120,7 +115,7 @@ def get_menu_elements(category_slug='basic'):
 
 
 def send_menu(recipient_id, category_slug='basic'):
-    params = {'access_token': g.facebook_token}
+    params = {'access_token': app.config['facebook_access_token']}
     headers = {'Content-Type': 'application/json'}
     request_content = {
         'recipient': {
@@ -145,7 +140,8 @@ def send_menu(recipient_id, category_slug='basic'):
 
 
 def get_cart_elements(recipient_id):
-    cart_products, cart_cost = g.moltin_client.get_cart_data(f'facebookid_{recipient_id}')
+    moltin_client = app.config['moltin_client']
+    cart_products, cart_cost = moltin_client.get_cart_data(f'facebookid_{recipient_id}')
     elements = [
         {
             'title': 'Корзина',
@@ -166,7 +162,7 @@ def get_cart_elements(recipient_id):
         }
     ]
     for product in cart_products:
-        product = g.moltin_client.get_product(product['id'], f'facebookid_{recipient_id}')
+        product = moltin_client.get_product(product['id'], f'facebookid_{recipient_id}')
         elements.append({
             'title': f'{product["name"]} ({product["price"]})',
             'image_url': product['image_url'],
@@ -188,7 +184,7 @@ def get_cart_elements(recipient_id):
 
 
 def send_cart(recipient_id):
-    params = {'access_token': g.facebook_token}
+    params = {'access_token': app.config['facebook_access_token']}
     headers = {'Content-Type': 'application/json'}
     request_content = {
         'recipient': {
@@ -213,7 +209,7 @@ def send_cart(recipient_id):
 
 
 def send_message(recipient_id, message_text):
-    params = {'access_token': g.facebook_token}
+    params = {'access_token': app.config['facebook_access_token']}
     headers = {'Content-Type': 'application/json'}
     request_content = {
         'recipient': {
@@ -231,4 +227,13 @@ def send_message(recipient_id, message_text):
 
 
 if __name__ == '__main__':
+    app.config.update(
+        facebook_access_token=env('FACEBOOK_ACCESS_TOKEN'),
+        facebook_verify_token=env('FACEBOOK_VERIFY_TOKEN'),
+        redis_client=redis.Redis(
+            'redis-12339.c293.eu-central-1-1.ec2.cloud.redislabs.com',
+            port=12339, username='default', password=env('REDIS_PASSWORD'), decode_responses=True
+        ),
+        moltin_client=MoltinClient(env('MOLTIN_CLIENT_ID'), env('MOLTIN_CLIENT_SECRET'))
+    )
     app.run(debug=True)
