@@ -12,7 +12,7 @@ from telegram.ext import (
     Filters,
 )
 from moltin import MoltinClient
-from handlers import (
+from tg_handlers import (
     HANDLE_MENU,
     HANDLE_PRODUCT,
     HANDLE_CART,
