@@ -103,7 +103,6 @@ def send_menu(recipient_id, category_slug, app_config):
         'https://graph.facebook.com/v2.6/me/messages',
         params=params, headers=headers, json=request_content
     )
-    print(response.json())
     response.raise_for_status()
 
 
@@ -172,7 +171,6 @@ def send_cart(recipient_id, app_config):
         'https://graph.facebook.com/v2.6/me/messages',
         params=params, headers=headers, json=request_content
     )
-    print(response.json())
     response.raise_for_status()
 
 
