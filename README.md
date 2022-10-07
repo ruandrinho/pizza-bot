@@ -1,6 +1,6 @@
 # pizza-bot
  
-Бот сервиса доставки пиццы.
+Бот сервиса доставки пиццы для Telegram и Facebook.
 
 ## Как установить
 
@@ -11,6 +11,8 @@
 2) В настройках бота выберите Payments, выберите провайдера и получите у него токен для платежей
 3) Создайте аккаунт в сервисе Moltin
 4) Получите ключ API в сервисе Яндекс Geocoder
+5) Создайте в Facebook публичную страницу для бота и приложение. В настройках Messenger сгенерируйте маркер и подпишитесь на messages и messaging_postbacks
+6) Создайте базу данных в Redis
 
 Создайте файл окружения `.env` и заполните необходимым данными:
 ```
@@ -19,6 +21,12 @@ TELEGRAM_PAYMENT_PROVIDER_TOKEN=
 MOLTIN_CLIENT_ID=
 MOLTIN_CLIENT_SECRET=
 YANDEX_GEOCODER_API_KEY=
+FACEBOOK_ACCESS_TOKEN=
+FACEBOOK_VERIFY_TOKEN=
+REDIS_HOST=
+REDIS_PORT=
+REDIS_USERNAME=
+REDIS_PASSWORD=
 ```
 
 Python3 должен быть уже установлен. 
@@ -29,9 +37,19 @@ pip install -r requirements.txt
 
 ## Запуск бота
 
+Для Telegram:
 ```
-python main.py
+python tg_bot.py
 ```
+
+Для Facebook:
+```
+python fb_bot.py
+```
+
+Бот для Facebook работает на механизме вебхуков, поэтому должен быть запущен на сервере. Адрес сайта нужно добавить в настройки Messenger приложения.
+
+Отдельный скрипт для Facebook `check_updates.py` предназначен для проверки обновления меню и его кеширования. Его выполнение можно настроить через `cron`.
 
 ## Деплой на Heroku
 
