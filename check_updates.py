@@ -62,8 +62,11 @@ def main():
     env.read_env()
 
     redis_client = redis.Redis(
-        'redis-12339.c293.eu-central-1-1.ec2.cloud.redislabs.com',
-        port=12339, username='default', password=env('REDIS_PASSWORD'), decode_responses=True
+        host=env('REDIS_HOST'),
+        port=env('REDIS_PORT'),
+        username=env('REDIS_USERNAME'),
+        password=env('REDIS_PASSWORD'),
+        decode_responses=True
     )
 
     moltin_client = MoltinClient(env('MOLTIN_CLIENT_ID'), env('MOLTIN_CLIENT_SECRET'))
