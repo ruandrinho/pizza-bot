@@ -10,7 +10,6 @@ def handle_users_reply(sender_id, message_text, postback_payload, app_config):
         'MENU': handle_menu,
         'CART': handle_cart
     }
-    # redis_client.set(f'facebookid_{sender_id}', '')
     recorded_state = redis_client.get(f'facebookid_{sender_id}')
     if not recorded_state or recorded_state not in states_functions.keys():
         user_state = 'START'
@@ -74,14 +73,9 @@ def handle_cart(sender_id, message_text, postback_payload, app_config):
     return 'CART'
 
 
-def get_menu_elements(category_slug, redis_client):
-    elements = redis_client.get(f'elements_{category_slug}')
-    if elements:
-        return json.loads(elements)
-    return
-
-
 def send_menu(recipient_id, category_slug, app_config):
+    if not category_slug:
+        category_slug = 'basic'
     redis_client = app_config['redis_client']
     params = {'access_token': app_config['facebook_access_token']}
     headers = {'Content-Type': 'application/json'}
@@ -94,7 +88,7 @@ def send_menu(recipient_id, category_slug, app_config):
                 'type': 'template',
                 'payload': {
                     'template_type': 'generic',
-                    'elements': get_menu_elements(category_slug if category_slug else 'basic', redis_client)
+                    'elements': json.loads(redis_client.get(f'elements_{category_slug}'))
                 }
             }
         }
