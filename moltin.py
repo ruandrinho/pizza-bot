@@ -44,6 +44,7 @@ class MoltinClient:
 
     def add_product_to_cart(self, product_id, product_quantity, telegram_user_id):
         self.check_token()
+        print(telegram_user_id, self.token)
         moltin_carts_response = requests.post(
             f'https://api.moltin.com/v2/carts/{telegram_user_id}/items',
             headers={'Authorization': f'Bearer {self.token}'},
@@ -82,7 +83,8 @@ class MoltinClient:
         )
         moltin_carts_response.raise_for_status()
         cart_products = [{
-            'id': product['id'],
+            'id': product['product_id'],
+            'inner_id': product['id'],
             'name': product['name'],
             'description': product['description'],
             'price': product['meta']['display_price']['with_tax']['unit']['formatted'],
@@ -91,6 +93,15 @@ class MoltinClient:
         } for product in moltin_carts_response.json()['data']]
         total_cart_cost = moltin_carts_response.json()['meta']['display_price']['with_tax']['formatted']
         return (cart_products, total_cart_cost)
+
+    def get_categories(self):
+        self.check_token()
+        moltin_categories_response = requests.get(
+            'https://api.moltin.com/v2/categories',
+            headers={'Authorization': f'Bearer {self.token}'}
+        )
+        moltin_categories_response.raise_for_status()
+        return moltin_categories_response.json()['data']
 
     def get_customer_location(self, telegram_user_id):
         self.check_token()
@@ -122,7 +133,7 @@ class MoltinClient:
         moltin_flows_response.raise_for_status()
         return moltin_flows_response.json()['data']
 
-    def get_product(self, product_id, telegram_user_id):
+    def get_product(self, product_id, telegram_user_id=0):
         self.check_token()
         moltin_products_response = requests.get(
             f'https://api.moltin.com/v2/products/{product_id}',
@@ -139,6 +150,9 @@ class MoltinClient:
         moltin_files_response.raise_for_status()
         moltin_file = moltin_files_response.json()['data']
 
+        quantity_in_cart = self.get_product_quantity_in_cart(moltin_product['name'], telegram_user_id)\
+            if telegram_user_id else 0
+
         return {
             'id': moltin_product['id'],
             'name': moltin_product['name'],
@@ -146,7 +160,7 @@ class MoltinClient:
             'price': moltin_product['meta']['display_price']['with_tax']['formatted'],
             'stock': moltin_product['meta']['stock']['level'],
             'image_url': moltin_file['link']['href'],
-            'quantity_in_cart': self.get_product_quantity_in_cart(moltin_product['name'], telegram_user_id)
+            'quantity_in_cart': quantity_in_cart
         }
 
     def get_product_quantity_in_cart(self, product_name, telegram_user_id):
@@ -162,10 +176,28 @@ class MoltinClient:
                 return product['quantity']
         return 0
 
+    def get_products_by_category(self, category_slug='basic'):
+        self.check_token()
+        moltin_categories_map = {c['slug']: c['id'] for c in self.get_categories()}
+        moltin_products_response = requests.get(
+            f'https://api.moltin.com/v2/products?filter=eq(category.id,{moltin_categories_map[category_slug]})',
+            headers={'Authorization': f'Bearer {self.token}'}
+        )
+        moltin_products_response.raise_for_status()
+        return moltin_products_response.json()['data']
+
     def remove_product_from_cart(self, product_id, telegram_user_id):
         self.check_token()
+        cart_products, _ = self.get_cart_data(telegram_user_id)
+        product_inner_id = False
+        for product in cart_products:
+            if product['id'] == product_id:
+                product_inner_id = product['inner_id']
+        if not product_inner_id:
+            return
+        # print(f'https://api.moltin.com/v2/carts/{telegram_user_id}/items/{product_id}', self.token)
         moltin_carts_response = requests.delete(
-            f'https://api.moltin.com/v2/carts/{telegram_user_id}/items/{product_id}',
+            f'https://api.moltin.com/v2/carts/{telegram_user_id}/items/{product_inner_id}',
             headers={'Authorization': f'Bearer {self.token}'}
         )
         moltin_carts_response.raise_for_status()
