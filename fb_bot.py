@@ -20,16 +20,17 @@ def verify():
 @app.route('/', methods=['POST'])
 def webhook():
     data = request.get_json()
-    if data['object'] == 'page':
-        for entry in data['entry']:
-            for messaging_event in entry['messaging']:
-                sender_id = messaging_event['sender']['id']
-                message_text, postback_payload = '', ''
-                if messaging_event.get('message'):
-                    message_text = messaging_event['message']['text']
-                if messaging_event.get('postback'):
-                    postback_payload = messaging_event['postback']['payload']
-                handle_users_reply(sender_id, message_text, postback_payload, app.config)
+    if data['object'] != 'page':
+        return 'ok', 200
+    for entry in data['entry']:
+        for messaging_event in entry['messaging']:
+            sender_id = messaging_event['sender']['id']
+            message_text, postback_payload = '', ''
+            if messaging_event.get('message'):
+                message_text = messaging_event['message']['text']
+            if messaging_event.get('postback'):
+                postback_payload = messaging_event['postback']['payload']
+            handle_users_reply(sender_id, message_text, postback_payload, app.config)
     return 'ok', 200
 
 
